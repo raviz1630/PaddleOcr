@@ -1,36 +1,37 @@
-from paddleocr import PaddleOCR
-from PIL import Image, ImageDraw, ImageFont
+from paddleocr import PaddleOCR, draw_ocr
+from googletrans import Translator
+from PIL import Image
 
-# 1. run OCR
-ocr = PaddleOCR(ocr_version='PP-OCRv4', use_angle_cls=True, lang='en')
-img_path = '/Users/rchembula/Desktop/PaddleOCR/TestFiles/stock_gs200.jpg'
-result = ocr.ocr(img_path, cls=True)[0]    # result is a list of [box, (txt, score)]
+# Initialize PaddleOCR
+ocr = PaddleOCR(use_angle_cls=True, lang='en')
+img_path = '/Users/rchembula/Desktop/PaddleOCR/TestFiles/sample4.c68c31b95ffb.jpg'
+result = ocr.ocr(img_path, cls=True)
 
-# 2. load original to get size
-orig = Image.open(img_path)
-W, H = orig.size
+# Extract text and scores
+extracted_text = []
+for idx in range(len(result)):
+    res = result[idx]
+    for line in res:
+        extracted_text.append((line[1][0], line[1][1]))  # (text, confidence)
 
-# 3. make a blank white canvas
-canvas = Image.new('RGB', (W, H), (255, 255, 255))
-draw = ImageDraw.Draw(canvas)
+# Combine all extracted text into a single string
+combined_text = ' '.join([text for text, score in extracted_text])
 
-# 4. choose a font (you can substitute any .ttf you like)
-font = ImageFont.truetype(
-    '/Users/rchembula/Desktop/PaddleOCR/TestFiles/simfang.ttf',
-    size=16
-)
+# Translate the combined text to Arabic
+translator = Translator()
+translated_text = translator.translate(combined_text, src='en', dest='ar').text
 
-# 5. draw each box + text
-for box, (txt, score) in result:
-    # box is four corner points [[x1,y1],…,[x4,y4]]
-    pts = [tuple(map(int, pt)) for pt in box]
-    
-    # text at top-left of box, offset a little above
-    x0, y0 = pts[0]
-    # if text would go off-canvas, bump it down
-    text_y = max(0, y0 - 20)
-    draw.text((x0, text_y), txt, font=font, fill='darkgreen')
+# Display the results
+print("Original Extracted Text:")
+print(combined_text)
+print("\nTranslated Text (Arabic):")
+print(translated_text)
 
-# 6. save
-canvas.save('reconstructed_layout.jpg')
-print("Wrote reconstructed_layout.jpg")
+# Save the translated text to a file
+with open('translated_result.txt', 'w', encoding='utf-8') as f:
+    f.write("Original Text:\n")
+    f.write(combined_text + "\n\n")
+    f.write("Translated Text (Arabic):\n")
+    f.write(translated_text)
+
+print("\nResults saved to 'translated_result.txt'.")
