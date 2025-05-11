@@ -1,52 +1,44 @@
-from paddleocr import PaddleOCR, draw_ocr
-from googletrans import Translator
-from PIL import Image, ImageDraw, ImageFont
-import arabic_reshaper
-from bidi.algorithm import get_display
-import numpy as np
+import json
+from PIL import Image, ImageDraw
+import os
+from paddlex import create_model
 
-# Initialize PaddleOCR
-ocr = PaddleOCR(use_angle_cls=True, lang='en')
-img_path = '/Users/rchembula/Desktop/PaddleOCR/TestFiles/sample4.c68c31b95ffb.jpg'
-result = ocr.ocr(img_path, cls=True)
 
-# Load the original image
-image = Image.open(img_path).convert('RGB')
-draw = ImageDraw.Draw(image)
+model = create_model(model_name="PP-OCRv4_mobile_det")
+output = model.predict("/Users/rchembula/Desktop/PaddleOCR/TestFiles/test_image1.jpeg", batch_size=1)
+for res in output:
+    res.print()
+    res.save_to_img(save_path="./output/")
+    res.save_to_json(save_path="./output/res.json")
 
-# Initialize translator
-translator = Translator()
+# Load detection results
+with open("./output/res.json", "r") as f:
+    data = json.load(f)
 
-# Arabic font (replace with a valid Arabic font path)
-# Download a font like "Arial Unicode MS" or "Noto Sans Arabic"
-font_path = '/Users/rchembula/Desktop/PaddleOCR/TestFiles/NotoSansArabic-VariableFont_wdth,wght.ttf'  # Update this path
-font_size = 12
-font = ImageFont.truetype(font_path, font_size)
+# Open image
+img = Image.open("/Users/rchembula/Desktop/PaddleOCR/TestFiles/test_image1.jpeg").convert("RGBA")
 
-# Process each detected text box
-for line in result[0]:
-    box = line[0]  # Bounding box coordinates
-    text = line[1][0]  # Extracted text
-    confidence = line[1][1]  # Confidence score
+# Prepare output folder
+os.makedirs("./output/bboxes_pil", exist_ok=True)
 
-    # Translate the text to Arabic
-    translated_text = translator.translate(text, src='en', dest='ar').text
+for i, poly in enumerate(data["dt_polys"]):
+    # compute bounding box of polygon
+    xs = [p[0] for p in poly]
+    ys = [p[1] for p in poly]
+    left, right = min(xs), max(xs)
+    top, bottom = min(ys), max(ys)
 
-    # Reshape and apply bidirectional algorithm for Arabic
-    reshaped_text = arabic_reshaper.reshape(translated_text)
-    bidi_text = get_display(reshaped_text)
+    # crop the rectangle region
+    crop_rect = img.crop((left, top, right, bottom))
 
-    # Calculate the position to place the translated text (use the top-left corner of the original box)
-    x1, y1 = box[0]  # Top-left corner
-    x2, y2 = box[2]  # Bottom-right corner
+    # create a mask
+    mask = Image.new("L", crop_rect.size, 0)
+    shifted_poly = [(x - left, y - top) for x, y in poly]
+    ImageDraw.Draw(mask).polygon(shifted_poly, outline=255, fill=255)
 
-    # Draw a white rectangle to cover the original text (optional)
-    draw.rectangle([x1, y1, x2, y2], fill='white')
+    # apply mask to get an exact quadrilateral with transparency
+    crop_poly = Image.new("RGBA", crop_rect.size)
+    crop_poly.paste(crop_rect, (0, 0), mask=mask)
 
-    # Draw the translated Arabic text
-    draw.text((x1, y1), bidi_text, fill='black', font=font)
-
-# Save the result
-output_path = 'translated_output.jpg'
-image.save(output_path)
-print(f"Translated image saved to: {output_path}")
+    # save
+    crop_poly.save(f"./output/bboxes_pil/bbox_{i:03d}.png")
