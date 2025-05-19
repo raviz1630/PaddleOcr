@@ -1,5 +1,7 @@
 import json
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+
+# — Helpers from before —————————————————————————————————————————
 
 def measure_text(draw, text, font):
     try:
@@ -8,23 +10,17 @@ def measure_text(draw, text, font):
     except AttributeError:
         return font.getsize(text)
 
-def wrap_text_to_box(draw, text, max_width, font):
-    """
-    Break `text` at word boundaries so each line <= max_width.
-    """
+def wrap_text(draw, text, max_width, font):
     import textwrap
-    # very rough first cut at chars/line
     wM,_ = measure_text(draw, "M", font)
     est = max(1, max_width // wM)
-    rough = textwrap.wrap(text, width=est)
     lines = []
-    for line in rough:
-        w,_ = measure_text(draw, line, font)
+    for chunk in textwrap.wrap(text, width=est):
+        w,_ = measure_text(draw, chunk, font)
         if w <= max_width:
-            lines.append(line)
+            lines.append(chunk)
         else:
-            # word-by-word fallback
-            words, cur = line.split(), ""
+            words, cur = chunk.split(), ""
             for w0 in words:
                 cand = (cur + " " + w0).strip()
                 wc,_ = measure_text(draw, cand, font)
@@ -37,66 +33,118 @@ def wrap_text_to_box(draw, text, max_width, font):
                 lines.append(cur)
     return lines
 
-# load your translated JSON
+# — Load data & choose font ————————————————————————————————————————
+
 with open("translated_results.json", encoding="utf-8") as f:
     data = json.load(f)
 
-# prepare canvases per page
-canvases = {}
-for p in data["pages"]:
-    pn, w, h = p["pageNumber"], int(p["width"]), int(p["height"])
-    img = Image.new("RGB", (w, h), "white")
-    canvases[pn] = (img, ImageDraw.Draw(img))
-
-# pick a font (monospace often helps alignment)
+# pick a font that you like
 try:
-    font = ImageFont.truetype("Consola.ttf", 12)
+    font = ImageFont.truetype("/Users/rchembula/Desktop/PaddleOCR/TestFiles/simfang.ttf", size=12)
 except IOError:
     font = ImageFont.load_default()
 
-padding = 6  # px of margin inside each box
+padding    = 4
+blur_radius= 4
+alpha_rect = (255,255,255,200)  # semi‐opaque white
 
-# draw paragraphs
-for para in data.get("paragraphs", []):
-    text = para.get("translatedContent", "").strip()
-    if not text: continue
+# — Process each page ————————————————————————————————————————————
 
-    for region in para["boundingRegions"]:
-        pn = region["pageNumber"]
-        flat = region["polygon"]
-        pts = [(flat[i], flat[i+1]) for i in range(0, len(flat), 2)]
-        xs, ys = zip(*pts)
-        x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
+for page in data["pages"]:
+    pn = page["pageNumber"]
+    # 1) Load the original scan as RGBA
+    orig = Image.open(f"/Users/rchembula/Desktop/PaddleOCR/TestFiles/test_image4.jpeg").convert("RGBA")
 
-        img, draw = canvases[pn]
-        # outline
-        draw.polygon(pts, outline="blue", width=2)
+    # 2) Blur *underneath* each region
+    for col in ("paragraphs","tables"):
+        items = data.get(col, [])
+        if col == "tables":
+            # flatten both whole-table and each cell
+            regions = []
+            for t in items:
+                regions += t.get("boundingRegions", [])
+                for cell in t.get("cells", []):
+                    regions += cell.get("boundingRegions", [])
+        else:
+            regions = [r for para in items for r in para["boundingRegions"]]
 
-        # compute inner box
-        inner_w  = (x1 - x0) - 2*padding
-        inner_h  = (y1 - y0) - 2*padding
-        if inner_w <= 0 or inner_h <= 0:
-            continue  # too small to draw text
+        for region in regions:
+            flat = region["polygon"]
+            xs, ys = flat[0::2], flat[1::2]
+            box = (min(xs), min(ys), max(xs), max(ys))
+            # crop, blur, paste back
+            patch   = orig.crop(box)
+            blurred = patch.filter(ImageFilter.GaussianBlur(blur_radius))
+            orig.paste(blurred, box)
 
-        # wrap text to that width
-        lines = wrap_text_to_box(draw, text, inner_w, font)
-        line_h = measure_text(draw, "Ay", font)[1]
-        block_h = line_h * len(lines)
+    # 3) Prepare two layers: one for rectangles, one for text
+    overlay     = Image.new("RGBA", orig.size, (255,255,255,0))
+    text_layer  = Image.new("RGBA", orig.size, (255,255,255,0))
+    draw_rect   = ImageDraw.Draw(overlay)
+    draw_text   = ImageDraw.Draw(text_layer)
 
-        # vertically center the block
-        start_y = y0 + padding + max(0, (inner_h - block_h)//2)
-        start_x = x0 + padding
+    # 4) Draw paragraphs: white rect + wrapped text
+    for para in data.get("paragraphs", []):
+        txt = para.get("translatedContent","").strip()
+        if not txt: continue
+        for region in para["boundingRegions"]:
+            flat = region["polygon"]
+            xs, ys = flat[0::2], flat[1::2]
+            x0,y0,x1,y1 = min(xs),min(ys),max(xs),max(ys)
 
-        # draw each line, left-aligned
-        for i, line in enumerate(lines):
-            y = start_y + i*line_h
-            if y + line_h > y0 + padding + inner_h:
-                break
-            draw.text((start_x, y), line, font=font, fill="black")
+            # rectangle
+            draw_rect.rectangle([x0,y0,x1,y1], fill=alpha_rect)
 
-# (Repeat the same approach for table cells, using a red outline, etc.)
+            # wrap & draw text
+            inner_w = (x1-x0) - 2*padding
+            lines   = wrap_text(draw_text, txt, inner_w, font)
+            lh      = measure_text(draw_text, "Ay", font)[1]
+            start_y = y0 + padding
 
-# save
-for pn, (img, _) in canvases.items():
-    img.save(f"page_{pn}_translated_english_on_canvas.png")
-    print("Wrote page", pn)
+            for i,line in enumerate(lines):
+                y = start_y + i*lh
+                if y+lh > y1-padding:
+                    break
+                draw_text.text((x0+padding, y), line, font=font, fill="black")
+
+    # 5) Draw tables: whole‐table optional + cells
+    for tbl in data.get("tables", []):
+        # whole table in green (optional)
+        for region in tbl.get("boundingRegions", []):
+            flat = region["polygon"]
+            pts  = [(flat[i],flat[i+1]) for i in range(0,len(flat),2)]
+            draw_rect.line(pts + [pts[0]], fill="green", width=2)
+
+        # each cell in red + text
+        for cell in tbl.get("cells", []):
+            txt = cell.get("translatedContent","").strip()
+            if not txt: continue
+            for region in cell["boundingRegions"]:
+                flat = region["polygon"]
+                xs, ys = flat[0::2], flat[1::2]
+                x0,y0,x1,y1 = min(xs),min(ys),max(xs),max(ys)
+
+                draw_rect.rectangle([x0,y0,x1,y1], outline="red", width=1)
+
+                inner_w = (x1-x0) - 2*padding
+                lines   = wrap_text(draw_text, txt, inner_w, font)
+                lh      = measure_text(draw_text, "Ay", font)[1]
+                start_y = y0 + padding
+
+                for i,line in enumerate(lines):
+                    y = start_y + i*lh
+                    if y+lh > y1-padding:
+                        break
+                    draw_text.text((x0+padding, y), line, font=font, fill="black")
+
+    # 6) Brighten just the text layer
+    enhancer    = ImageEnhance.Brightness(text_layer)
+    bright_text = enhancer.enhance(1.8)  # 1.0 = no change; >1 = brighter
+
+    # 7) Composite everything
+    combined = Image.alpha_composite(orig, overlay)
+    combined = Image.alpha_composite(combined, bright_text).convert("RGB")
+
+    # 8) Save
+    combined.save(f"page_{pn}_translated_english_on_canvas.png")
+    print("Saved page", pn)
