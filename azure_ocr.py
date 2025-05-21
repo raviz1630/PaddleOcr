@@ -75,8 +75,8 @@ def process_and_upload_images(local_file_path):
         print("File is a PDF. Converting pages to images...")
         images = convert_from_path(local_file_path)
         for idx, img in enumerate(images):
-            img_path = f"/tmp/{uuid.uuid4()}_page_{idx + 1}.png"
-            img.save(img_path, "PNG")
+            img_path = f"/tmp/{uuid.uuid4()}_page_{idx + 1}.jpeg"
+            img.save(img_path, "JPEG")
             blob_name = upload_to_blob(img_path, blob_subfolder="segmented_images")
             segmented_blob_names.append(blob_name)
         return segmented_blob_names, "pdf"
