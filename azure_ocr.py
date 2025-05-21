@@ -82,10 +82,17 @@ def process_and_upload_images(local_file_path):
         return segmented_blob_names, "pdf"
 
     elif mime_type and mime_type.startswith("image"):
-        print("File is an image. No conversion needed.")
-        blob_name = upload_to_blob(local_file_path, blob_subfolder="segmented_images")
+        print('File is an image. Converting to JPEG...')
+        # Open image and convert to RGB JPEG
+        with Image.open(local_file_path) as img:
+            rgb_img = img.convert('RGB')
+            jpeg_path = os.path.splitext(local_file_path)[0] + '.jpg'
+            rgb_img.save(jpeg_path, 'JPEG')
+
+        # Upload converted JPEG to blob storage
+        blob_name = upload_to_blob(jpeg_path, blob_subfolder='segmented_images')
         segmented_blob_names.append(blob_name)
-        return segmented_blob_names, "image"
+        return segmented_blob_names, 'image'
 
     else:
         raise ValueError("Unsupported file type. Please provide a PDF or image file.")
