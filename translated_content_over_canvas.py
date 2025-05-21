@@ -141,12 +141,13 @@ def main():
             print(f"⚠️ Could not find matching image for {json_blob_name}: {e}")
             continue
 
-        orig = Image.open(BytesIO(image_bytes)).convert("RGBA")
-
         for page in data.get("pages", []):
-            # 1) Blur *underneath* each region
+            # load the page-specific image
+            orig = Image.open(BytesIO(image_bytes)).convert("RGBA")
+
+            # 1) Blur *underneath* each region, using only this page’s regions
             for col in ("paragraphs", "tables"):
-                items = data.get(col, [])
+                items = page.get(col, [])  # <<— use page, not data
                 if col == "tables":
                     regions = []
                     for t in items:
