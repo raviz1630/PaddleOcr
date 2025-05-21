@@ -21,8 +21,6 @@ def get_blob_service_client():
         credential=storage_account_key
     )
 
-# ----------------- Helper Methods --------------------
-
 def download_blob_to_memory(container, blob_name):
     blob_client = container.get_blob_client(blob_name)
     data = blob_client.download_blob().readall()
@@ -32,12 +30,9 @@ def upload_image_to_blob(container, img: Image.Image, blob_name: str):
     output = BytesIO()
     img.save(output, format="PNG")
     output.seek(0)
-
     blob_client = container.get_blob_client(blob_name)
     blob_client.upload_blob(output, overwrite=True)
     print(f"✅ Uploaded: {blob_name}")
-
-# ------------ Overlay Drawing Functions (unchanged) -----------
 
 def measure_text(draw, text, font):
     try:
@@ -69,20 +64,43 @@ def wrap_text(draw, text, max_width, font):
                 lines.append(cur)
     return lines
 
-# ------------- Main Processing ----------------------
+def calculate_required_font_sizes(draw, text_boxes, font_path, padding=4, min_font=6, max_font=72):
+    """Calculate required font sizes for all text boxes and return the maximum size that fits all"""
+    font_sizes = []
+    
+    for box in text_boxes:
+        text, (x0, y0, x1, y1) = box
+        width = x1 - x0 - 2 * padding
+        height = y1 - y0 - 2 * padding
+        
+        # Binary search to find maximum font size for this box
+        low, high = min_font, max_font
+        best_size = min_font
+        
+        while low <= high:
+            mid = (low + high) // 2
+            font = ImageFont.truetype(font_path, size=mid)
+            lines = wrap_text(draw, text, width, font)
+            line_height = measure_text(draw, "Ay", font)[1]
+            total_height = len(lines) * line_height
+            
+            if total_height <= height:
+                best_size = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+        
+        font_sizes.append(best_size)
+    
+    # Return the smallest font size that fits all boxes
+    return min(font_sizes) if font_sizes else 12
 
 def main():
     blob_service = get_blob_service_client()
     container = blob_service.get_container_client(container_name)
-
     blobs = container.list_blobs(name_starts_with=input_json_folder + "/")
     
-    # Use a font available on your machine, fallback to default
-    try:
-        font = ImageFont.truetype("/Users/rchembula/Desktop/PaddleOCR/TestFiles/simfang.ttf", size=12)
-    except IOError:
-        font = ImageFont.load_default()
-
+    font_path = "/Users/rchembula/Desktop/PaddleOCR/TestFiles/simfang.ttf"
     padding = 4
     blur_radius = 4
     alpha_rect = (255, 255, 255, 200)
@@ -96,14 +114,7 @@ def main():
         json_bytes = download_blob_to_memory(container, json_blob_name)
         data = json.loads(json_bytes)
 
-        # Build a map of page number -> image blob name
-        image_blobs = {
-            re.search(r'page_\d+', b.name).group(): b.name
-            for b in container.list_blobs(name_starts_with=input_image_folder + "/")
-            if b.name.endswith(".png") and re.search(r'page_\d+', b.name)
-        }
-
-                # Attempt 1: Match by "page_X" (for PDFs)
+        # Attempt to find matching image
         json_page_match = re.search(r'page_\d+', json_blob_name)
         image_blob_name = None
 
@@ -116,24 +127,19 @@ def main():
             }
             image_blob_name = image_blobs.get(page_key)
 
-        # Attempt 2: Fuzzy match using core name (for images like test_image1)
         if not image_blob_name:
             json_base_name = os.path.splitext(os.path.basename(json_blob_name))[0]
-            json_keyword = json_base_name.split("_")[0]  # e.g., "test_image1"
+            json_keyword = json_base_name.split("_")[0]
             image_candidates = list(container.list_blobs(name_starts_with=input_image_folder + "/"))
-
             for b in image_candidates:
                 img_name = os.path.basename(b.name)
                 if json_keyword in img_name:
                     image_blob_name = b.name
-                    print(f"🧩 Matched image '{img_name}' for JSON '{json_base_name}'")
                     break
-
 
         if not image_blob_name:
             print(f"⚠️ No matching image found for {json_blob_name}")
             continue
-
 
         try:
             image_bytes = download_blob_to_memory(container, image_blob_name)
@@ -142,12 +148,46 @@ def main():
             continue
 
         for page in data.get("pages", []):
-            # load the page-specific image
             orig = Image.open(BytesIO(image_bytes)).convert("RGBA")
+            overlay = Image.new("RGBA", orig.size, (255, 255, 255, 0))
+            text_layer = Image.new("RGBA", orig.size, (255, 255, 255, 0))
+            draw_rect = ImageDraw.Draw(overlay)
+            draw_text = ImageDraw.Draw(text_layer)
 
-            # 1) Blur *underneath* each region, using only this page’s regions
+            # First pass: Collect all text boxes and calculate required font sizes
+            text_boxes = []
+            
+            # Process paragraphs
+            for para in data.get("paragraphs", []):
+                txt = para.get("translatedContent", "").strip()
+                if not txt: continue
+                for region in para["boundingRegions"]:
+                    flat = region["polygon"]
+                    xs, ys = flat[0::2], flat[1::2]
+                    box = (min(xs), min(ys), max(xs), max(ys))
+                    text_boxes.append((txt, box))
+
+            # Process table cells
+            for tbl in data.get("tables", []):
+                for cell in tbl.get("cells", []):
+                    txt = cell.get("translatedContent", "").strip()
+                    if not txt: continue
+                    for region in cell.get("boundingRegions", []):
+                        flat = region["polygon"]
+                        xs, ys = flat[0::2], flat[1::2]
+                        box = (min(xs), min(ys), max(xs), max(ys))
+                        text_boxes.append((txt, box))
+
+            # Calculate universal font size
+            universal_font_size = calculate_required_font_sizes(
+                draw_text, text_boxes, font_path, padding
+            )
+            universal_font = ImageFont.truetype(font_path, size=universal_font_size)
+            print(f"📏 Using universal font size: {universal_font_size}pt")
+
+            # Blur regions
             for col in ("paragraphs", "tables"):
-                items = page.get(col, [])  # <<— use page, not data
+                items = page.get(col, [])
                 if col == "tables":
                     regions = []
                     for t in items:
@@ -165,56 +205,33 @@ def main():
                     blurred = patch.filter(ImageFilter.GaussianBlur(blur_radius))
                     orig.paste(blurred, box)
 
-            overlay = Image.new("RGBA", orig.size, (255, 255, 255, 0))
-            text_layer = Image.new("RGBA", orig.size, (255, 255, 255, 0))
-            draw_rect = ImageDraw.Draw(overlay)
-            draw_text = ImageDraw.Draw(text_layer)
+            # Second pass: Render all text with the universal font size
+            for txt, (x0, y0, x1, y1) in text_boxes:
+                draw_rect.rectangle([x0, y0, x1, y1], fill=alpha_rect)
+                inner_w = (x1 - x0) - 2 * padding
+                inner_h = (y1 - y0) - 2 * padding
+                
+                lines = wrap_text(draw_text, txt, inner_w, universal_font)
+                lh = measure_text(draw_text, "Ay", universal_font)[1]
+                start_y = y0 + padding
 
-            for para in data.get("paragraphs", []):
-                txt = para.get("translatedContent", "").strip()
-                if not txt: continue
-                for region in para["boundingRegions"]:
-                    flat = region["polygon"]
-                    xs, ys = flat[0::2], flat[1::2]
-                    x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
-                    draw_rect.rectangle([x0, y0, x1, y1], fill=alpha_rect)
+                # Center text vertically if there's extra space
+                total_text_height = len(lines) * lh
+                if total_text_height < inner_h:
+                    start_y = y0 + (y1 - y0 - total_text_height) // 2
 
-                    inner_w = (x1 - x0) - 2 * padding
-                    lines = wrap_text(draw_text, txt, inner_w, font)
-                    lh = measure_text(draw_text, "Ay", font)[1]
-                    start_y = y0 + padding
+                for i, line in enumerate(lines):
+                    y = start_y + i * lh
+                    if y + lh > y1 - padding:
+                        break
+                    draw_text.text((x0 + padding, y), line, font=universal_font, fill="black")
 
-                    for i, line in enumerate(lines):
-                        y = start_y + i * lh
-                        if y + lh > y1 - padding:
-                            break
-                        draw_text.text((x0 + padding, y), line, font=font, fill="black")
-
+            # Draw table borders
             for tbl in data.get("tables", []):
                 for region in tbl.get("boundingRegions", []):
                     flat = region["polygon"]
                     pts = [(flat[i], flat[i + 1]) for i in range(0, len(flat), 2)]
                     draw_rect.line(pts + [pts[0]], fill="green", width=2)
-
-                for cell in tbl.get("cells", []):
-                    txt = cell.get("translatedContent", "").strip()
-                    if not txt: continue
-                    for region in cell.get("boundingRegions", []):
-                        flat = region["polygon"]
-                        xs, ys = flat[0::2], flat[1::2]
-                        x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
-                        draw_rect.rectangle([x0, y0, x1, y1], outline="red", width=1)
-
-                        inner_w = (x1 - x0) - 2 * padding
-                        lines = wrap_text(draw_text, txt, inner_w, font)
-                        lh = measure_text(draw_text, "Ay", font)[1]
-                        start_y = y0 + padding
-
-                        for i, line in enumerate(lines):
-                            y = start_y + i * lh
-                            if y + lh > y1 - padding:
-                                break
-                            draw_text.text((x0 + padding, y), line, font=font, fill="black")
 
             bright_text = ImageEnhance.Brightness(text_layer).enhance(1.8)
             combined = Image.alpha_composite(orig, overlay)
