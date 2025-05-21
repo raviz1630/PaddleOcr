@@ -79,7 +79,7 @@ def main():
     
     # Use a font available on your machine, fallback to default
     try:
-        font = ImageFont.truetype("/Users/rchembula/Desktop/PaddleOCR/TestFiles/simfang.ttf", size=26)
+        font = ImageFont.truetype("/Users/rchembula/Desktop/PaddleOCR/TestFiles/simfang.ttf", size=12)
     except IOError:
         font = ImageFont.load_default()
 
@@ -103,18 +103,37 @@ def main():
             if b.name.endswith(".png") and re.search(r'page_\d+', b.name)
         }
 
-        # Extract page number from JSON file
+                # Attempt 1: Match by "page_X" (for PDFs)
         json_page_match = re.search(r'page_\d+', json_blob_name)
-        if not json_page_match:
-            print(f"⚠️ Could not extract page number from {json_blob_name}")
-            continue
+        image_blob_name = None
 
-        page_key = json_page_match.group()
-        image_blob_name = image_blobs.get(page_key)
+        if json_page_match:
+            page_key = json_page_match.group()
+            image_blobs = {
+                re.search(r'page_\d+', b.name).group(): b.name
+                for b in container.list_blobs(name_starts_with=input_image_folder + "/")
+                if re.search(r'page_\d+', b.name)
+            }
+            image_blob_name = image_blobs.get(page_key)
+
+        # Attempt 2: Fuzzy match using core name (for images like test_image1)
+        if not image_blob_name:
+            json_base_name = os.path.splitext(os.path.basename(json_blob_name))[0]
+            json_keyword = json_base_name.split("_")[0]  # e.g., "test_image1"
+            image_candidates = list(container.list_blobs(name_starts_with=input_image_folder + "/"))
+
+            for b in image_candidates:
+                img_name = os.path.basename(b.name)
+                if json_keyword in img_name:
+                    image_blob_name = b.name
+                    print(f"🧩 Matched image '{img_name}' for JSON '{json_base_name}'")
+                    break
+
 
         if not image_blob_name:
-            print(f"⚠️ No matching image found for {json_blob_name} using key: {page_key}")
+            print(f"⚠️ No matching image found for {json_blob_name}")
             continue
+
 
         try:
             image_bytes = download_blob_to_memory(container, image_blob_name)
