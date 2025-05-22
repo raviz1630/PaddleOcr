@@ -1,22 +1,31 @@
-# Let's begin by refactoring and improving the script based on the earlier suggestions.
-# Key improvements:
-# - Dynamic font scaling based on bounding box size.
-# - Improved text wrapping.
-# - Better handling of bounding regions.
-# - Soft blur masking.
-
 import os
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 import json
 import textwrap
+import re
+from io import BytesIO
+from azure.storage.blob import BlobServiceClient
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+
+# Azure Storage Configuration
+storage_account_name = "nonpoaiplay"
+storage_account_key = "QCxdq0lJ5j6xn84DwkvJcEalRkLfcYNyAZQZnCx23+0XqxrF1KUr9ASiuKiSk0URtHyXXBTZ0SNi+AStlmlXFg=="
+container_name = "arabic"
 
 # Constants
 PADDING = 4
 BLUR_RADIUS = 4
 ALPHA_RECT = (255, 255, 255, 200)
 FONT_PATH = "/Users/rchembula/Desktop/PaddleOCR/TestFiles/simfang.ttf"
-IMAGE_PATH_TEMPLATE = "/Users/rchembula/Desktop/PaddleOCR/TestFiles/page_3.jpeg"
-OUTPUT_PATH_TEMPLATE = "page_{pn}_translated_english_on_canvas.png"
+INPUT_IMAGE_FOLDER = "segmented_images"
+INPUT_JSON_FOLDER = "translated_json_folder"
+OUTPUT_FOLDER = "final_results"
+
+# Initialize Azure Blob Service
+blob_service_client = BlobServiceClient(
+    f"https://{storage_account_name}.blob.core.windows.net",
+    credential=storage_account_key
+)
+container_client = blob_service_client.get_container_client(container_name)
 
 # Helpers
 def measure_text(draw, text, font):
@@ -57,10 +66,6 @@ def load_font(size=20):
         return ImageFont.truetype(FONT_PATH, size=size)
     except IOError:
         return ImageFont.load_default()
-
-def load_data(path):
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
 
 def blur_regions(orig, regions):
     for region in regions:
@@ -113,9 +118,34 @@ def draw_tables(draw_rect, draw_text, tables):
             for region in cell["boundingRegions"]:
                 draw_text_box(draw_rect, draw_text, txt, region["polygon"])
 
-def process_page(page, data):
-    pn = page["pageNumber"]
-    orig = Image.open(IMAGE_PATH_TEMPLATE.replace("1", str(pn))).convert("RGBA")
+def download_blob_as_image(blob_path):
+    blob_client = container_client.get_blob_client(blob_path)
+    stream = blob_client.download_blob()
+    return Image.open(BytesIO(stream.readall())).convert("RGBA")
+
+def download_blob_as_json(blob_path):
+    blob_client = container_client.get_blob_client(blob_path)
+    stream = blob_client.download_blob()
+    return json.loads(stream.readall().decode("utf-8"))
+
+def upload_image_to_azure(filename, image):
+    output_stream = BytesIO()
+    image.save(output_stream, format="PNG")
+    output_stream.seek(0)
+    blob_client = container_client.get_blob_client(f"{OUTPUT_FOLDER}/{filename}")
+    blob_client.upload_blob(output_stream, overwrite=True)
+
+def process_page(page_num):
+    image_blob_path = f"{INPUT_IMAGE_FOLDER}/page_{page_num}.jpeg"
+    json_blob_path = f"{INPUT_JSON_FOLDER}/test_pdf_page_{page_num}.json"
+
+    try:
+        image = download_blob_as_image(image_blob_path)
+        data = download_blob_as_json(json_blob_path)
+    except Exception as e:
+        print(f"Skipping page {page_num}: {e}")
+        return
+
     paragraphs = data.get("paragraphs", [])
     tables = data.get("tables", [])
     regions = [r for para in paragraphs for r in para["boundingRegions"]]
@@ -123,10 +153,10 @@ def process_page(page, data):
         regions += t.get("boundingRegions", [])
         for cell in t.get("cells", []):
             regions += cell.get("boundingRegions", [])
-    blur_regions(orig, regions)
+    blur_regions(image, regions)
 
-    overlay = Image.new("RGBA", orig.size, (255, 255, 255, 0))
-    text_layer = Image.new("RGBA", orig.size, (255, 255, 255, 0))
+    overlay = Image.new("RGBA", image.size, (255, 255, 255, 0))
+    text_layer = Image.new("RGBA", image.size, (255, 255, 255, 0))
     draw_rect = ImageDraw.Draw(overlay)
     draw_text = ImageDraw.Draw(text_layer)
 
@@ -136,15 +166,29 @@ def process_page(page, data):
     enhancer = ImageEnhance.Brightness(text_layer)
     bright_text = enhancer.enhance(2.8)
 
-    combined = Image.alpha_composite(orig, overlay)
+    combined = Image.alpha_composite(image, overlay)
     combined = Image.alpha_composite(combined, bright_text).convert("RGB")
-    combined.save(OUTPUT_PATH_TEMPLATE.format(pn=pn))
+
+    output_filename = f"page_{page_num}_translated_english_on_canvas.png"
+    upload_image_to_azure(output_filename, combined)
+    print(f"✅ Processed and uploaded: {output_filename}")
 
 def main():
-    data = load_data("translated_results.json")
-    for page in data["pages"]:
-        process_page(page, data)
+    blobs = container_client.list_blobs(name_starts_with=INPUT_IMAGE_FOLDER + "/")
+    page_nums = []
+
+    for blob in blobs:
+        match = re.search(r'page_(\d+)\.jpeg$', blob.name)
+        if match:
+            page_nums.append(int(match.group(1)))
+
+    if not page_nums:
+        print("⚠️ No images found in segmented_images folder.")
+        return
+
+    page_nums.sort()
+    for page_num in page_nums:
+        process_page(page_num)
 
 if __name__ == "__main__":
     main()
-
