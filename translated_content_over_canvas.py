@@ -19,6 +19,7 @@ FONT_PATH = "/Users/rchembula/Desktop/PaddleOCR/TestFiles/simfang.ttf"
 INPUT_IMAGE_FOLDER = "segmented_images"
 INPUT_JSON_FOLDER = "translated_json_folder"
 OUTPUT_FOLDER = "final_results"
+FINAL_PDF_NAME = "combined_translated_document.pdf"
 
 # Initialize Azure Blob Service
 blob_service_client = BlobServiceClient(
@@ -28,6 +29,58 @@ blob_service_client = BlobServiceClient(
 container_client = blob_service_client.get_container_client(container_name)
 
 # Helpers
+def combine_images_to_pdf():
+    # List all images in the final_results folder
+    blobs = container_client.list_blobs(name_starts_with=OUTPUT_FOLDER + "/")
+    image_files = []
+    
+    for blob in blobs:
+        if blob.name.lower().endswith(('.png', '.jpg', '.jpeg')):
+            image_files.append(blob.name)
+    
+    if not image_files:
+        print("⚠️ No images found in final_results folder to combine into PDF.")
+        return
+    
+    # Sort the images by page number
+    image_files.sort(key=lambda x: int(re.search(r'page_(\d+)', x).group(1)))
+    
+    # Download all images and store in memory
+    images = []
+    for img_blob in image_files:
+        try:
+            blob_client = container_client.get_blob_client(img_blob)
+            stream = blob_client.download_blob()
+            img = Image.open(BytesIO(stream.readall()))
+            if img.mode == 'RGBA':
+                img = img.convert('RGB')
+            images.append(img)
+        except Exception as e:
+            print(f"⚠️ Error processing {img_blob}: {e}")
+    
+    if not images:
+        print("⚠️ No valid images could be loaded for PDF creation.")
+        return
+    
+    # Create a temporary file in memory for the PDF
+    pdf_buffer = BytesIO()
+    
+    # Save the first image as PDF and append the rest
+    images[0].save(
+        pdf_buffer,
+        format="PDF",
+        save_all=True,
+        append_images=images[1:] if len(images) > 1 else None,
+        quality=100
+    )
+    
+    pdf_buffer.seek(0)
+    
+    # Upload the PDF to Azure
+    blob_client = container_client.get_blob_client(FINAL_PDF_NAME)
+    blob_client.upload_blob(pdf_buffer, overwrite=True)
+    print(f"✅ Successfully created and uploaded combined PDF: {FINAL_PDF_NAME}")
+
 def measure_text(draw, text, font):
     try:
         x0, y0, x1, y1 = draw.textbbox((0, 0), text, font=font)
@@ -189,6 +242,9 @@ def main():
     page_nums.sort()
     for page_num in page_nums:
         process_page(page_num)
+
+    # After processing all pages, combine them into a PDF
+    combine_images_to_pdf()
 
 if __name__ == "__main__":
     main()

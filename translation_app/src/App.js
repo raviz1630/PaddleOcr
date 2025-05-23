@@ -619,4 +619,4 @@ const DocumentTranslationApp = () => {
   );
 };
 
-export default DocumentTranslationApp; 
+export default DocumentTranslationApp;
