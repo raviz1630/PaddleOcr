@@ -1,5 +1,7 @@
-import React, { useState, useCallback, useRef } from 'react';
-import { Upload, FileText, Image, Download, Eye, CheckCircle, Clock, AlertCircle, Play, Trash2, RefreshCw, X, ZoomIn, ZoomOut, RotateCw } from 'lucide-react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { Upload, FileText, Image, Download, Eye, CheckCircle, Clock, AlertCircle, Play, Trash2, RefreshCw, X, ZoomIn, ZoomOut } from 'lucide-react';
+
+const API_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
 
 const DocumentTranslationApp = () => {
   const [files, setFiles] = useState([]);
@@ -8,53 +10,91 @@ const DocumentTranslationApp = () => {
   const [previewFile, setPreviewFile] = useState(null);
   const [previewZoom, setPreviewZoom] = useState(1);
   const fileInputRef = useRef(null);
+  const processingQueue = useRef([]);
+  const isProcessing = useRef(false);
 
-  // Enhanced file processing with more realistic timing and error handling
-  const processFile = useCallback((fileId) => {
-    setFiles(prev => prev.map(file => 
-      file.id === fileId 
-        ? { ...file, status: 'processing', stage: 'uploading', progress: 0, startTime: Date.now() }
-        : file
-    ));
+  // Process files from the queue
+  const processQueue = useCallback(async () => {
+    if (isProcessing.current || processingQueue.current.length === 0) return;
+    
+    isProcessing.current = true;
+    const fileId = processingQueue.current[0];
+    const fileIndex = files.findIndex(f => f.id === fileId);
+    if (fileIndex === -1) {
+      processingQueue.current.shift();
+      isProcessing.current = false;
+      return processQueue();
+    }
 
-    // Simulate uploading stage
-    setTimeout(() => {
+    try {
+      // Update file status to processing
+      setFiles(prev => prev.map(file => 
+        file.id === fileId 
+          ? { ...file, status: 'processing', stage: 'uploading', progress: 0, startTime: Date.now() }
+          : file
+      ));
+
+      // Step 1: Upload file
+      const fileObj = files.find(f => f.id === fileId);
+      const formData = new FormData();
+      formData.append('file', fileObj.file);
+
       setFiles(prev => prev.map(file => 
         file.id === fileId 
           ? { ...file, stage: 'uploading', progress: 15 }
           : file
       ));
-    }, 500);
 
-    // Simulate OCR stage
-    setTimeout(() => {
+      const uploadResponse = await fetch(`${API_URL}/upload/`, {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (!uploadResponse.ok) {
+        throw new Error(`Upload failed: ${uploadResponse.statusText}`);
+      }
+
+      const uploadData = await uploadResponse.json();
+
+      // Step 2: Process file - OCR stage
       setFiles(prev => prev.map(file => 
         file.id === fileId 
           ? { ...file, stage: 'ocr', progress: 35 }
           : file
       ));
-    }, 2000);
 
-    // Simulate Translation stage
-    setTimeout(() => {
+      // Step 3: Translation stage
       setFiles(prev => prev.map(file => 
         file.id === fileId 
           ? { ...file, stage: 'translation', progress: 65 }
           : file
       ));
-    }, 4500);
 
-    // Simulate Visual Overlay stage
-    setTimeout(() => {
+      // Step 4: Overlay stage
       setFiles(prev => prev.map(file => 
         file.id === fileId 
           ? { ...file, stage: 'overlay', progress: 85 }
           : file
       ));
-    }, 7000);
 
-    // Complete with mock result
-    setTimeout(() => {
+      const processResponse = await fetch(`${API_URL}/process/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: uploadData.id,
+          filename: uploadData.filename
+        })
+      });
+
+      if (!processResponse.ok) {
+        throw new Error(`Processing failed: ${await processResponse.text()}`);
+      }
+
+      const processData = await processResponse.json();
+
+      // Final completion
       setFiles(prev => prev.map(file => 
         file.id === fileId 
           ? { 
@@ -64,14 +104,33 @@ const DocumentTranslationApp = () => {
               progress: 100,
               completedAt: new Date(),
               processingTime: Date.now() - file.startTime,
-              resultUrl: `data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==`,
-              originalPages: file.type.includes('pdf') ? Math.floor(Math.random() * 5) + 1 : 1,
-              translatedPages: file.type.includes('pdf') ? Math.floor(Math.random() * 5) + 1 : 1
+              resultUrl: `${API_URL}/${processData.result_path.replace('\\', '/')}`,
+              resultPath: processData.result_path
             }
           : file
       ));
-    }, 9000);
-  }, []);
+
+      processingQueue.current.shift();
+    } catch (error) {
+      console.error('Processing error:', error);
+      setFiles(prev => prev.map(file => 
+        file.id === fileId 
+          ? { ...file, status: 'error', error: error.message }
+          : file
+      ));
+      processingQueue.current.shift();
+    } finally {
+      isProcessing.current = false;
+      setTimeout(processQueue, 1000);
+    }
+  }, [files]);
+
+  const processFile = useCallback((fileId) => {
+    if (!processingQueue.current.includes(fileId)) {
+      processingQueue.current.push(fileId);
+    }
+    processQueue();
+  }, [processQueue]);
 
   const handleDrag = useCallback((e) => {
     e.preventDefault();
@@ -87,14 +146,21 @@ const DocumentTranslationApp = () => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    
     const droppedFiles = Array.from(e.dataTransfer.files);
     handleFiles(droppedFiles);
   }, []);
 
   const validateFile = (file) => {
     const maxSize = 50 * 1024 * 1024; // 50MB
-    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/bmp', 'image/tiff', 'image/gif'];
+    const allowedTypes = [
+      'application/pdf', 
+      'image/jpeg', 
+      'image/jpg', 
+      'image/png', 
+      'image/bmp', 
+      'image/tiff', 
+      'image/gif'
+    ];
     
     if (file.size > maxSize) {
       return { valid: false, error: 'File size exceeds 50MB limit' };
@@ -128,15 +194,20 @@ const DocumentTranslationApp = () => {
   }, []);
 
   const handleFileInput = (e) => {
-    handleFiles(e.target.files);
+    if (e.target.files && e.target.files.length > 0) {
+      handleFiles(e.target.files);
+      e.target.value = ''; // Reset input to allow selecting same file again
+    }
   };
 
   const removeFile = (fileId) => {
     setFiles(prev => prev.filter(file => file.id !== fileId));
+    processingQueue.current = processingQueue.current.filter(id => id !== fileId);
   };
 
   const clearAllFiles = () => {
     setFiles([]);
+    processingQueue.current = [];
   };
 
   const retryFile = (fileId) => {
@@ -145,6 +216,37 @@ const DocumentTranslationApp = () => {
         ? { ...file, status: 'pending', stage: 'waiting', progress: 0, error: null }
         : file
     ));
+    processFile(fileId);
+  };
+
+  const handleDownload = async (file) => {
+    try {
+      if (!file.resultUrl) {
+        throw new Error('No result available for download');
+      }
+      
+      const response = await fetch(file.resultUrl);
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.statusText}`);
+      }
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `translated_${file.name.replace(/\.[^/.]+$/, '')}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Download failed:', error);
+      setFiles(prev => prev.map(f => 
+        f.id === file.id 
+          ? { ...f, error: error.message }
+          : f
+      ));
+    }
   };
 
   const getStageIcon = (stage) => {
@@ -187,8 +289,10 @@ const DocumentTranslationApp = () => {
   };
 
   const openPreview = (file) => {
-    setPreviewFile(file);
-    setPreviewZoom(1);
+    if (file.resultUrl) {
+      setPreviewFile(file);
+      setPreviewZoom(1);
+    }
   };
 
   const closePreview = () => {
@@ -327,12 +431,17 @@ const DocumentTranslationApp = () => {
                 <div className="flex space-x-2">
                   <button 
                     onClick={() => openPreview(file)}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200 flex items-center space-x-2"
+                    disabled={!file.resultUrl}
+                    className={`px-4 py-2 ${file.resultUrl ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-400 cursor-not-allowed'} text-white rounded-lg transition-colors duration-200 flex items-center space-x-2`}
                   >
                     <Eye className="w-4 h-4" />
                     <span>Preview</span>
                   </button>
-                  <button className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors duration-200 flex items-center space-x-2">
+                  <button 
+                    onClick={() => handleDownload(file)}
+                    disabled={!file.resultUrl}
+                    className={`px-4 py-2 ${file.resultUrl ? 'bg-gray-600 hover:bg-gray-700' : 'bg-gray-400 cursor-not-allowed'} text-white rounded-lg transition-colors duration-200 flex items-center space-x-2`}
+                  >
                     <Download className="w-4 h-4" />
                     <span>Download</span>
                   </button>
@@ -370,14 +479,6 @@ const DocumentTranslationApp = () => {
               </div>
             </div>
           )}
-          
-          {file.status === 'completed' && file.originalPages && (
-            <div className="flex items-center space-x-6 text-sm text-gray-600 bg-gray-50 rounded-lg p-3">
-              <span>📄 {file.originalPages} page{file.originalPages !== 1 ? 's' : ''} processed</span>
-              <span>🌍 {file.translatedPages} page{file.translatedPages !== 1 ? 's' : ''} translated</span>
-              <span>⏱️ Processing time: {formatProcessingTime(file.processingTime)}</span>
-            </div>
-          )}
         </div>
       ))}
     </div>
@@ -406,7 +507,6 @@ const DocumentTranslationApp = () => {
     </div>
   );
 
-  // Preview Modal
   const PreviewModal = ({ file, onClose }) => (
     <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl max-w-4xl max-h-full overflow-hidden">
@@ -434,16 +534,19 @@ const DocumentTranslationApp = () => {
             </button>
           </div>
         </div>
-        <div className="p-4 max-h-96 overflow-auto">
+        <div className="p-4 max-h-[80vh] overflow-auto">
           <div 
             className="mx-auto"
             style={{ transform: `scale(${previewZoom})`, transformOrigin: 'top center' }}
           >
-            <img 
-              src={file.resultUrl} 
-              alt={`Preview of ${file.name}`}
-              className="max-w-full h-auto border border-gray-200 rounded"
-            />
+            {file.resultUrl && (
+              <iframe 
+                src={file.resultUrl} 
+                title={`Preview of ${file.name}`}
+                className="w-full min-h-[500px] border border-gray-200 rounded"
+                style={{ height: '80vh' }}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -569,24 +672,26 @@ const DocumentTranslationApp = () => {
                       </div>
                     </div>
                     
-                    {file.originalPages && (
-                      <div className="mb-4 text-sm text-gray-600 bg-gray-50 rounded-lg p-3">
-                        <div className="flex justify-between">
-                          <span>Pages: {file.originalPages}</span>
-                          <span>Time: {formatProcessingTime(file.processingTime)}</span>
-                        </div>
+                    <div className="mb-4 text-sm text-gray-600 bg-gray-50 rounded-lg p-3">
+                      <div className="flex justify-between">
+                        <span>Processing time: {formatProcessingTime(file.processingTime)}</span>
                       </div>
-                    )}
+                    </div>
                     
                     <div className="space-y-3">
                       <button 
                         onClick={() => openPreview(file)}
-                        className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200 flex items-center justify-center space-x-2"
+                        disabled={!file.resultUrl}
+                        className={`w-full px-4 py-2 ${file.resultUrl ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-400 cursor-not-allowed'} text-white rounded-lg transition-colors duration-200 flex items-center justify-center space-x-2`}
                       >
                         <Eye className="w-4 h-4" />
                         <span>Preview</span>
                       </button>
-                      <button className="w-full px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors duration-200 flex items-center justify-center space-x-2">
+                      <button 
+                        onClick={() => handleDownload(file)}
+                        disabled={!file.resultUrl}
+                        className={`w-full px-4 py-2 ${file.resultUrl ? 'bg-gray-600 hover:bg-gray-700' : 'bg-gray-400 cursor-not-allowed'} text-white rounded-lg transition-colors duration-200 flex items-center justify-center space-x-2`}
+                      >
                         <Download className="w-4 h-4" />
                         <span>Download</span>
                       </button>
