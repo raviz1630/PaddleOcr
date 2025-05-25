@@ -1,6 +1,8 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from azure.storage.blob import BlobServiceClient
+from datetime import datetime, timedelta
+from azure.storage.blob import generate_blob_sas, BlobSasPermissions
 import subprocess
 import os
 import shutil
@@ -31,10 +33,21 @@ UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def get_blob_url():
-    """Generate a URL to access the blob directly"""
+    """Generate a SAS URL to access the blob"""
     blob_service_client = BlobServiceClient.from_connection_string(connection_string)
     blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
-    return blob_client.url
+    
+    # Generate SAS token that's valid for 1 hour
+    sas_token = generate_blob_sas(
+        account_name=storage_account_name,
+        container_name=container_name,
+        blob_name=blob_name,
+        account_key=storage_account_key,
+        permission=BlobSasPermissions(read=True),
+        expiry=datetime.utcnow() + timedelta(hours=1)
+    )
+    
+    return f"{blob_client.url}?{sas_token}"
 
 @app.post("/upload/")
 async def upload_file(file: UploadFile = File(...)):

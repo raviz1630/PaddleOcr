@@ -536,13 +536,27 @@ const DocumentTranslationApp = () => {
       <div className="p-4 max-h-[80vh] overflow-auto">
         {file.resultUrl ? (
           <div style={{ transform: `scale(${previewZoom})`, transformOrigin: 'top center' }}>
-            {file.resultUrl.endsWith('.pdf') ? (
-              <iframe 
-                src={file.resultUrl} 
-                title={`Preview of ${file.name}`}
-                className="w-full min-h-[500px] border border-gray-200 rounded"
-                style={{ height: '80vh' }}
-              />
+            {file.resultUrl.includes('.pdf') ? (
+              <object 
+                data={`${file.resultUrl}#view=fitH`}
+                type="application/pdf"
+                width="100%"
+                height="600px"
+                className="border border-gray-200 rounded"
+              >
+                <p className="text-center py-16">
+                  <AlertCircle className="w-16 h-16 mx-auto text-red-500" />
+                  <p className="mt-4 text-lg text-gray-600">PDF preview not available in your browser</p>
+                  <a 
+                    href={file.resultUrl} 
+                    className="mt-4 inline-block px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Download PDF
+                  </a>
+                </p>
+              </object>
             ) : (
               <img 
                 src={file.resultUrl} 
