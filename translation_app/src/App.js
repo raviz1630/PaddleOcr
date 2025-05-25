@@ -529,17 +529,18 @@ const DocumentTranslationApp = () => {
           </button>
         </div>
       </div>
-      <div className="p-4 max-h-[80vh] overflow-auto">
+      <div className="p-4 max-h-[80vh] h-full overflow-auto">
         {file.resultUrl ? (
-          <div style={{ transform: `scale(${previewZoom})`, transformOrigin: 'top center' }}>
+          <div className="w-full h-full" style={{ transform: `scale(${previewZoom})`, transformOrigin: 'top center' }}>
             {file.resultUrl.includes('.pdf') ? (
               <object 
                 data={`${file.resultUrl}#view=fitH`}
                 type="application/pdf"
                 width="100%"
-                height="600px"
-                className="border border-gray-200 rounded"
+                height="100%"
+                className="border border-gray-200 rounded h-[80vh] w-full"
               >
+
                 <p className="text-center py-16">
                   <AlertCircle className="w-16 h-16 mx-auto text-red-500" />
                   <p className="mt-4 text-lg text-gray-600">PDF preview not available in your browser</p>
