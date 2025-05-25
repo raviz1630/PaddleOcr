@@ -1,8 +1,11 @@
+import io
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from azure.storage.blob import BlobServiceClient
 from datetime import datetime, timedelta
 from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+from fastapi.responses import FileResponse, StreamingResponse
+import requests
 import subprocess
 import os
 import shutil
@@ -103,6 +106,45 @@ async def process_file(file_data: dict):
 @app.get("/status/")
 async def check_status():
     return {"status": "running"}
+
+@app.get("/download/{filename}")
+async def download_file(filename: str):
+    """Serve the file directly from Azure Blob Storage"""
+    try:
+        # Download from Azure and stream to client
+        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+        blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+        
+        # Get blob data
+        blob_data = blob_client.download_blob()
+        content = blob_data.readall()
+        
+        return StreamingResponse(
+            io.BytesIO(content),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=translated_{filename}"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
+    
+@app.get("/preview/{filename}")
+async def preview_file(filename: str):
+    """Serve the file for preview"""
+    try:
+        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+        blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+        
+        # Get blob data
+        blob_data = blob_client.download_blob()
+        content = blob_data.readall()
+        
+        return StreamingResponse(
+            io.BytesIO(content),
+            media_type="application/pdf",
+            headers={"Content-Disposition": "inline"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Preview failed: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

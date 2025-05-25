@@ -104,8 +104,8 @@ const DocumentTranslationApp = () => {
         progress: 100,
         completedAt: new Date(),
         processingTime: Date.now() - file.startTime,
-        resultUrl: processData.result_url || processData.resultUrl, // Handle both cases
-        resultPath: processData.result_path || "" // Safe fallback
+        resultUrl: `${API_URL}/preview/${encodeURIComponent(file.name)}`,
+        resultPath: processData.result_path || ""
       }
     : file
 ));
@@ -219,34 +219,30 @@ const DocumentTranslationApp = () => {
   };
 
   const handleDownload = async (file) => {
-    try {
-      if (!file.resultUrl) {
-        throw new Error('No result available for download');
-      }
-      
-      const response = await fetch(file.resultUrl);
-      if (!response.ok) {
-        throw new Error(`Download failed: ${response.statusText}`);
-      }
-      
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `translated_${file.name.replace(/\.[^/.]+$/, '')}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Download failed:', error);
-      setFiles(prev => prev.map(f => 
-        f.id === file.id 
-          ? { ...f, error: error.message }
-          : f
-      ));
+  try {
+    const response = await fetch(`${API_URL}/download/${encodeURIComponent(file.name)}`);
+    if (!response.ok) {
+      throw new Error(`Download failed: ${response.statusText}`);
     }
-  };
+    
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `translated_${file.name.replace(/\.[^/.]+$/, '')}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error('Download failed:', error);
+    setFiles(prev => prev.map(f => 
+      f.id === file.id 
+        ? { ...f, error: error.message }
+        : f
+    ));
+  }
+};
 
   const getStageIcon = (stage) => {
     switch (stage) {
@@ -508,7 +504,7 @@ const DocumentTranslationApp = () => {
 
   const PreviewModal = ({ file, onClose }) => (
   <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-    <div className="bg-white rounded-xl max-w-4xl max-h-full overflow-hidden">
+    <div className="bg-white rounded-xl max-w-7xl w-[95vw] h-[90vh] overflow-hidden">
       <div className="flex items-center justify-between p-4 border-b border-gray-200">
         <h3 className="text-lg font-semibold text-gray-900">{file.name}</h3>
         <div className="flex items-center space-x-2">
