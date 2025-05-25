@@ -96,20 +96,19 @@ const DocumentTranslationApp = () => {
 
       // Final completion
       setFiles(prev => prev.map(file => 
-        file.id === fileId 
-          ? { 
-              ...file, 
-              status: 'completed', 
-              stage: 'completed', 
-              progress: 100,
-              completedAt: new Date(),
-              processingTime: Date.now() - file.startTime,
-              resultUrl: `${API_URL}/${processData.result_path.replace('\\', '/')}`,
-              resultPath: processData.result_path
-            }
-          : file
-      ));
-
+  file.id === fileId 
+    ? { 
+        ...file, 
+        status: 'completed', 
+        stage: 'completed', 
+        progress: 100,
+        completedAt: new Date(),
+        processingTime: Date.now() - file.startTime,
+        resultUrl: processData.result_url || processData.resultUrl, // Handle both cases
+        resultPath: processData.result_path || "" // Safe fallback
+      }
+    : file
+));
       processingQueue.current.shift();
     } catch (error) {
       console.error('Processing error:', error);
@@ -508,50 +507,60 @@ const DocumentTranslationApp = () => {
   );
 
   const PreviewModal = ({ file, onClose }) => (
-    <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl max-w-4xl max-h-full overflow-hidden">
-        <div className="flex items-center justify-between p-4 border-b border-gray-200">
-          <h3 className="text-lg font-semibold text-gray-900">{file.name}</h3>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => setPreviewZoom(Math.max(0.5, previewZoom - 0.25))}
-              className="p-2 text-gray-600 hover:bg-gray-100 rounded"
-            >
-              <ZoomOut className="w-4 h-4" />
-            </button>
-            <span className="text-sm text-gray-600">{Math.round(previewZoom * 100)}%</span>
-            <button
-              onClick={() => setPreviewZoom(Math.min(3, previewZoom + 0.25))}
-              className="p-2 text-gray-600 hover:bg-gray-100 rounded"
-            >
-              <ZoomIn className="w-4 h-4" />
-            </button>
-            <button
-              onClick={onClose}
-              className="p-2 text-gray-600 hover:bg-gray-100 rounded"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-        <div className="p-4 max-h-[80vh] overflow-auto">
-          <div 
-            className="mx-auto"
-            style={{ transform: `scale(${previewZoom})`, transformOrigin: 'top center' }}
+  <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+    <div className="bg-white rounded-xl max-w-4xl max-h-full overflow-hidden">
+      <div className="flex items-center justify-between p-4 border-b border-gray-200">
+        <h3 className="text-lg font-semibold text-gray-900">{file.name}</h3>
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => setPreviewZoom(Math.max(0.5, previewZoom - 0.25))}
+            className="p-2 text-gray-600 hover:bg-gray-100 rounded"
           >
-            {file.resultUrl && (
+            <ZoomOut className="w-4 h-4" />
+          </button>
+          <span className="text-sm text-gray-600">{Math.round(previewZoom * 100)}%</span>
+          <button
+            onClick={() => setPreviewZoom(Math.min(3, previewZoom + 0.25))}
+            className="p-2 text-gray-600 hover:bg-gray-100 rounded"
+          >
+            <ZoomIn className="w-4 h-4" />
+          </button>
+          <button
+            onClick={onClose}
+            className="p-2 text-gray-600 hover:bg-gray-100 rounded"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+      <div className="p-4 max-h-[80vh] overflow-auto">
+        {file.resultUrl ? (
+          <div style={{ transform: `scale(${previewZoom})`, transformOrigin: 'top center' }}>
+            {file.resultUrl.endsWith('.pdf') ? (
               <iframe 
                 src={file.resultUrl} 
                 title={`Preview of ${file.name}`}
                 className="w-full min-h-[500px] border border-gray-200 rounded"
                 style={{ height: '80vh' }}
               />
+            ) : (
+              <img 
+                src={file.resultUrl} 
+                alt={`Preview of ${file.name}`}
+                className="max-w-full h-auto border border-gray-200 rounded"
+              />
             )}
           </div>
-        </div>
+        ) : (
+          <div className="text-center py-16">
+            <AlertCircle className="w-16 h-16 mx-auto text-red-500" />
+            <p className="mt-4 text-lg text-gray-600">Preview not available</p>
+          </div>
+        )}
       </div>
     </div>
-  );
+  </div>
+);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
