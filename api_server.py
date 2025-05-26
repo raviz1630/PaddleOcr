@@ -1,7 +1,7 @@
 import io
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobServiceClient, ContainerClient
 from datetime import datetime, timedelta
 from azure.storage.blob import generate_blob_sas, BlobSasPermissions
 from fastapi.responses import FileResponse, StreamingResponse
@@ -35,6 +35,23 @@ app.add_middleware(
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+def clear_container():
+    """Delete all blobs in the container"""
+    try:
+        container_client = ContainerClient.from_connection_string(
+            conn_str=connection_string,
+            container_name=container_name
+        )
+        
+        # List all blobs in the container and delete them
+        blobs = container_client.list_blobs()
+        for blob in blobs:
+            container_client.delete_blob(blob.name)
+            
+        return {"status": "success", "message": f"Container {container_name} cleared successfully"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 def get_blob_url():
     """Generate a SAS URL to access the blob"""
     blob_service_client = BlobServiceClient.from_connection_string(connection_string)
@@ -55,6 +72,11 @@ def get_blob_url():
 @app.post("/upload/")
 async def upload_file(file: UploadFile = File(...)):
     try:
+        # Clear the container before starting new processing
+        clear_result = clear_container()
+        if clear_result["status"] != "success":
+            raise HTTPException(status_code=500, detail=f"Failed to clear container: {clear_result['message']}")
+        
         # Save the uploaded file with its original name
         file_path = os.path.join(UPLOAD_FOLDER, file.filename)
         
